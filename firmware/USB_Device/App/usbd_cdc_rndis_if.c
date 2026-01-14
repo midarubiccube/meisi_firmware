@@ -224,7 +224,7 @@ static int8_t CDC_RNDIS_Itf_Receive(uint8_t *Buf, uint32_t *Len)
 
   memcpy(UserTxBuffer+44, Buf, *Len);
   USBD_CDC_RNDIS_TransmitPacket(&hUsbDeviceFS);
-
+  USBD_CDC_RNDIS_ReceivePacket(&hUsbDeviceFS);
   return (0);
 }
 

@@ -1723,11 +1723,10 @@ static uint8_t USBD_CDC_RNDIS_ProcessPacketMsg(USBD_HandleTypeDef *pdev,
   /* Use temporary storage variables to comply with MISRA-C 2012 rule of (+) operand allowed types */
   tmp1 = (uint32_t)PacketMsg;
   tmp2 = (uint32_t)(PacketMsg->DataOffset);
-  hcdc->RxBuffer = (uint8_t *)(tmp1 + tmp2 + CDC_RNDIS_PCKTMSG_DATAOFFSET_OFFSET);
   hcdc->RxLength = PacketMsg->DataLength;
 
   /* Process data by application */
-  ((USBD_CDC_RNDIS_ItfTypeDef *)pdev->pUserData)->Receive(hcdc->RxBuffer, &hcdc->RxLength);
+  ((USBD_CDC_RNDIS_ItfTypeDef *)pdev->pUserData)->Receive((uint8_t *)(tmp1 + tmp2 + CDC_RNDIS_PCKTMSG_DATAOFFSET_OFFSET), &hcdc->RxLength);
 
   return (uint8_t)USBD_OK;
 }
