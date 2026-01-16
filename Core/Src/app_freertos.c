@@ -115,9 +115,10 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   /* Infinite loop */
-  //LwIP_Init();
+  LwIP_Init();
   for(;;)
   {
+    
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */

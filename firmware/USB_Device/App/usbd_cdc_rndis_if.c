@@ -1,130 +1,158 @@
 /**
-  ******************************************************************************
-  * @file    usbd_cdc_rndis_if_template.c
-  * @author  MCD Application Team
-  * @brief   Source file for USBD CDC_RNDIS interface template
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2019 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under Ultimate Liberty license
-  * SLA0044, the "License"; You may not use this file except in compliance with
-  * the License. You may obtain a copy of the License at:
-  *                      www.st.com/SLA0044
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    usbd_cdc_rndis_if_template.c
+ * @author  MCD Application Team
+ * @brief   Source file for USBD CDC_RNDIS interface template
+ ******************************************************************************
+ * @attention
+ *
+ * <h2><center>&copy; Copyright (c) 2019 STMicroelectronics.
+ * All rights reserved.</center></h2>
+ *
+ * This software component is licensed by ST under Ultimate Liberty license
+ * SLA0044, the "License"; You may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at:
+ *                      www.st.com/SLA0044
+ *
+ ******************************************************************************
+ */
 
 /* Includes ------------------------------------------------------------------*/
 
 /* Include TCP/IP stack header files */
 
-#include "lwip/opt.h"
-#include "lwip/init.h"
 #include "lwip/dhcp.h"
+#include "lwip/init.h"
 #include "lwip/netif.h"
+#include "lwip/opt.h"
 #include "lwip/timeouts.h"
 #include "netif/etharp.h"
-//#include "http_cgi_ssi.h"
-//#include "ethernetif.h"
 
+// #include "http_cgi_ssi.h"
+// #include "ethernetif.h"
+
+#include "cmsis_os.h"
+#include "lwip/etharp.h"
 #include "main.h"
 #include "usbd_cdc_rndis_if.h"
-#include "lwip/etharp.h"
-
 
 #define IFNAME0 'S'
 #define IFNAME1 'T'
 
-#define RNDIS_MTU                   1500
-#define ETH_HEADER_SIZE             14
-#define ETH_MAX_PACKET_SIZE         RNDIS_MTU + ETH_HEADER_SIZE
+#define RNDIS_MTU 1500
+#define ETH_HEADER_SIZE 14
+#define ETH_MAX_PACKET_SIZE RNDIS_MTU + ETH_HEADER_SIZE
 
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
-#pragma data_alignment=4
+#if defined(__ICCARM__) /*!< IAR Compiler */
+#pragma data_alignment = 4
 #endif
-__ALIGN_BEGIN uint8_t UserRxBuffer[CDC_RNDIS_ETH_MAX_SEGSZE + 100] __ALIGN_END; /* Received Data over USB are stored in this buffer */
+__ALIGN_BEGIN uint8_t
+    UserRxBuffer[CDC_RNDIS_ETH_MAX_SEGSZE +
+                 100] __ALIGN_END; /* Received Data over USB are stored in this
+                                      buffer */
 
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
-#pragma data_alignment=4
+#if defined(__ICCARM__) /*!< IAR Compiler */
+#pragma data_alignment = 4
 #endif
-__ALIGN_BEGIN static uint8_t UserTxBuffer[CDC_RNDIS_ETH_MAX_SEGSZE + 100] __ALIGN_END; /* Received Data over CDC_RNDIS (CDC_RNDIS interface) are stored in this buffer */
+__ALIGN_BEGIN static uint8_t
+    UserTxBuffer[CDC_RNDIS_ETH_MAX_SEGSZE +
+                 100] __ALIGN_END; /* Received Data over CDC_RNDIS (CDC_RNDIS
+                                      interface) are stored in this buffer */
 
 static uint8_t CDC_RNDISInitialized = 0U;
 
 /* USB handler declaration */
-extern USBD_HandleTypeDef  hUsbDeviceFS;
-
+extern USBD_HandleTypeDef hUsbDeviceFS;
+osSemaphoreId RxPktSemaphore = NULL;
 
 /* Private function prototypes -----------------------------------------------*/
 static int8_t CDC_RNDIS_Itf_Init(void);
 static int8_t CDC_RNDIS_Itf_DeInit(void);
-static int8_t CDC_RNDIS_Itf_Control(uint8_t cmd, uint8_t *pbuf, uint16_t length);
+static int8_t CDC_RNDIS_Itf_Control(uint8_t cmd, uint8_t *pbuf,
+                                    uint16_t length);
 static int8_t CDC_RNDIS_Itf_Receive(uint8_t *pbuf, uint32_t *Len);
-static int8_t CDC_RNDIS_Itf_TransmitCplt(uint8_t *pbuf, uint32_t *Len, uint8_t epnum);
+static int8_t CDC_RNDIS_Itf_TransmitCplt(uint8_t *pbuf, uint32_t *Len,
+                                         uint8_t epnum);
 static int8_t CDC_RNDIS_Itf_Process(USBD_HandleTypeDef *pdev);
 
-USBD_CDC_RNDIS_ItfTypeDef USBD_CDC_RNDIS_fops =
-{
-  CDC_RNDIS_Itf_Init,
-  CDC_RNDIS_Itf_DeInit,
-  CDC_RNDIS_Itf_Control,
-  CDC_RNDIS_Itf_Receive,
-  CDC_RNDIS_Itf_TransmitCplt,
-  CDC_RNDIS_Itf_Process,
-  (uint8_t *)CDC_RNDIS_MAC_STR_DESC,
+USBD_CDC_RNDIS_ItfTypeDef USBD_CDC_RNDIS_fops = {
+    CDC_RNDIS_Itf_Init,
+    CDC_RNDIS_Itf_DeInit,
+    CDC_RNDIS_Itf_Control,
+    CDC_RNDIS_Itf_Receive,
+    CDC_RNDIS_Itf_TransmitCplt,
+    CDC_RNDIS_Itf_Process,
+    (uint8_t *)CDC_RNDIS_MAC_STR_DESC,
 };
 
-err_t linkoutput_fn(struct netif *netif, struct pbuf *p)
-{
-    struct pbuf *q;
-    static char data[ETH_MAX_PACKET_SIZE];
-    int size = 0;
-    for (int i = 0; i < 200; i++)
-    {
-        if (rndis_can_send()) break;
-        HAL_Delay(1);
-    }
-    for(q = p; q != NULL; q = q->next)
-    {
-        if (size + q->len > ETH_MAX_PACKET_SIZE)
-            return ERR_ARG;
-        memcpy(data + size, (char *)q->payload, q->len);
-        size += q->len;
-    }
-    if (!rndis_can_send())
-        return ERR_USE;
-    rndis_send(data, size);
-    return ERR_OK;
+err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
+  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis =
+      (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
+  struct pbuf *q;
+  static uint8_t *data = UserTxBuffer + 44;
+  int size = 0;
+  for (q = p; q != NULL; q = q->next) {
+    if (size + q->len > ETH_MAX_PACKET_SIZE)
+      return ERR_ARG;
+    memcpy(data + size, (char *)q->payload, q->len);
+    size += q->len;
+  }
+  // if (!rndis_can_send())
+  hcdc_cdc_rndis->TxState = 0U;
+  hcdc_cdc_rndis->TxLength = size + 44;
+  USBD_CDC_RNDIS_TransmitPacket(&hUsbDeviceFS);
+  return ERR_OK;
 }
 
-err_t rndisif_init(struct netif *netif)
-{
-    LWIP_ASSERT("netif != NULL", (netif != NULL));
-    netif->mtu = RNDIS_MTU;
-    netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP | NETIF_FLAG_UP;
-    netif->state = NULL;
-    netif->name[0] = IFNAME0;
-    netif->name[1] = IFNAME1;
-    netif->output = etharp_output;
-    netif->linkoutput = linkoutput_fn;
-    return ERR_OK;
+void ethernetif_input(void *argument) {
+  struct netif *netif = (struct netif *)argument;
+  
+  for (;;) {
+    if (osSemaphoreAcquire(RxPktSemaphore, osWaitForever) == osOK) {
+      struct pbuf *frame;
+      USBD_CDC_RNDIS_HandleTypeDef *hcdc = (USBD_CDC_RNDIS_HandleTypeDef *)hUsbDeviceFS.pClassData;
+      frame = pbuf_alloc(PBUF_RAW, hcdc->RxLength, PBUF_POOL);
+      memcpy(frame->payload, UserRxBuffer+44, hcdc->RxLength);
+      frame->len = hcdc->RxLength;
+      err_t err = netif->input(frame, netif);
+      USBD_CDC_RNDIS_ReceivePacket(&hUsbDeviceFS);
+    }
+  }
+}
+
+err_t rndisif_init(struct netif *netif) {
+  LWIP_ASSERT("netif != NULL", (netif != NULL));
+  netif->mtu = RNDIS_MTU;
+  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_LINK_UP |
+                 NETIF_FLAG_UP;
+  netif->state = NULL;
+  netif->name[0] = IFNAME0;
+  netif->name[1] = IFNAME1;
+  netif->output = etharp_output;
+  netif->linkoutput = linkoutput_fn;
+
+  RxPktSemaphore = osSemaphoreNew(1, 0, NULL);
+
+  osThreadAttr_t attributes;
+  memset(&attributes, 0x0, sizeof(osThreadAttr_t));
+  attributes.name = "EthIf";
+  attributes.stack_size = 350;
+  attributes.priority = osPriorityRealtime;
+  osThreadNew(ethernetif_input, netif, &attributes);
+  return ERR_OK;
 }
 
 /* Private functions ---------------------------------------------------------*/
 
 /**
-  * @brief  CDC_RNDIS_Itf_Init
-  *         Initializes the CDC_RNDIS media low layer
-  * @param  None
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_Init(void)
-{
-  if (CDC_RNDISInitialized == 0U)
-  {
+ * @brief  CDC_RNDIS_Itf_Init
+ *         Initializes the CDC_RNDIS media low layer
+ * @param  None
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_Init(void) {
+  if (CDC_RNDISInitialized == 0U) {
     /*
       Initialize the LwIP stack
       Add your code here
@@ -142,14 +170,15 @@ static int8_t CDC_RNDIS_Itf_Init(void)
 }
 
 /**
-  * @brief  CDC_RNDIS_Itf_DeInit
-  *         DeInitializes the CDC_RNDIS media low layer
-  * @param  None
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_DeInit(void)
-{
-  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis = (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
+ * @brief  CDC_RNDIS_Itf_DeInit
+ *         DeInitializes the CDC_RNDIS media low layer
+ * @param  None
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_DeInit(void) {
+  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis =
+      (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
 
   /*
      Add your code here
@@ -162,39 +191,39 @@ static int8_t CDC_RNDIS_Itf_DeInit(void)
 }
 
 /**
-  * @brief  CDC_RNDIS_Itf_Control
-  *         Manage the CDC_RNDIS class requests
-  * @param  Cmd: Command code
-  * @param  Buf: Buffer containing command data (request parameters)
-  * @param  Len: Number of data to be sent (in bytes)
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_Control(uint8_t cmd, uint8_t *pbuf, uint16_t length)
-{
-  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis = (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
+ * @brief  CDC_RNDIS_Itf_Control
+ *         Manage the CDC_RNDIS class requests
+ * @param  Cmd: Command code
+ * @param  Buf: Buffer containing command data (request parameters)
+ * @param  Len: Number of data to be sent (in bytes)
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_Control(uint8_t cmd, uint8_t *pbuf,
+                                    uint16_t length) {
+  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis =
+      (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
 
-  switch (cmd)
-  {
-    case CDC_RNDIS_SEND_ENCAPSULATED_COMMAND:
-      /* Add your code here */
-      break;
+  switch (cmd) {
+  case CDC_RNDIS_SEND_ENCAPSULATED_COMMAND:
+    /* Add your code here */
+    break;
 
-    case CDC_RNDIS_GET_ENCAPSULATED_RESPONSE:
-      /* Check if this is the first time we enter */
-      if (hcdc_cdc_rndis->LinkStatus == 0U)
-      {
-        /* Setup the Link up at TCP/IP stack level */
-        hcdc_cdc_rndis->LinkStatus = 1U;
-        /*
-          Add your code here
-        */
-      }
-      /* Add your code here */
-      break;
+  case CDC_RNDIS_GET_ENCAPSULATED_RESPONSE:
+    /* Check if this is the first time we enter */
+    if (hcdc_cdc_rndis->LinkStatus == 0U) {
+      /* Setup the Link up at TCP/IP stack level */
+      hcdc_cdc_rndis->LinkStatus = 1U;
+      /*
+        Add your code here
+      */
+    }
+    /* Add your code here */
+    break;
 
-    default:
-      /* Add your code here */
-      break;
+  default:
+    /* Add your code here */
+    break;
   }
 
   UNUSED(length);
@@ -204,45 +233,42 @@ static int8_t CDC_RNDIS_Itf_Control(uint8_t cmd, uint8_t *pbuf, uint16_t length)
 }
 
 /**
-  * @brief  CDC_RNDIS_Itf_Receive
-  *         Data received over USB OUT endpoint are sent over CDC_RNDIS interface
-  *         through this function.
-  * @param  Buf: Buffer of data to be transmitted
-  * @param  Len: Number of data received (in bytes)
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_Receive(uint8_t *Buf, uint32_t *Len)
-{
+ * @brief  CDC_RNDIS_Itf_Receive
+ *         Data received over USB OUT endpoint are sent over CDC_RNDIS interface
+ *         through this function.
+ * @param  Buf: Buffer of data to be transmitted
+ * @param  Len: Number of data received (in bytes)
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_Receive(uint8_t *Buf, uint32_t *Len) {
   /* Get the CDC_RNDIS handler pointer */
-  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis = (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
+  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis =
+      (USBD_CDC_RNDIS_HandleTypeDef *)(hUsbDeviceFS.pClassData);
 
   /* Call Eth buffer processing */
   hcdc_cdc_rndis->RxState = 1U;
 
-  hcdc_cdc_rndis->TxState = 0U;
-  hcdc_cdc_rndis->TxLength = *Len+44;
-
-  memcpy(UserTxBuffer+44, Buf, *Len);
-  USBD_CDC_RNDIS_TransmitPacket(&hUsbDeviceFS);
-  USBD_CDC_RNDIS_ReceivePacket(&hUsbDeviceFS);
+  osSemaphoreRelease(RxPktSemaphore);
   return (0);
 }
 
 /**
-  * @brief  CDC_RNDIS_Itf_TransmitCplt
-  *         Data transmitted callback
-  *
-  *         @note
-  *         This function is IN transfer complete callback used to inform user that
-  *         the submitted Data is successfully sent over USB.
-  *
-  * @param  Buf: Buffer of data to be received
-  * @param  Len: Number of data received (in bytes)
-  * @param  epnum: EP number
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
-{
+ * @brief  CDC_RNDIS_Itf_TransmitCplt
+ *         Data transmitted callback
+ *
+ *         @note
+ *         This function is IN transfer complete callback used to inform user
+ * that the submitted Data is successfully sent over USB.
+ *
+ * @param  Buf: Buffer of data to be received
+ * @param  Len: Number of data received (in bytes)
+ * @param  epnum: EP number
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_TransmitCplt(uint8_t *Buf, uint32_t *Len,
+                                         uint8_t epnum) {
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
@@ -251,19 +277,19 @@ static int8_t CDC_RNDIS_Itf_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t ep
 }
 
 /**
-  * @brief  CDC_RNDIS_Itf_Process
-  *         Data received over USB OUT endpoint are sent over CDC_RNDIS interface
-  *         through this function.
-  * @param  pdef: pointer to the USB Device Handle
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL
-  */
-static int8_t CDC_RNDIS_Itf_Process(USBD_HandleTypeDef *pdev)
-{
+ * @brief  CDC_RNDIS_Itf_Process
+ *         Data received over USB OUT endpoint are sent over CDC_RNDIS interface
+ *         through this function.
+ * @param  pdef: pointer to the USB Device Handle
+ * @retval Result of the operation: USBD_OK if all operations are OK else
+ * USBD_FAIL
+ */
+static int8_t CDC_RNDIS_Itf_Process(USBD_HandleTypeDef *pdev) {
   /* Get the CDC_RNDIS handler pointer */
-  USBD_CDC_RNDIS_HandleTypeDef   *hcdc_cdc_rndis = (USBD_CDC_RNDIS_HandleTypeDef *)(pdev->pClassData);
+  USBD_CDC_RNDIS_HandleTypeDef *hcdc_cdc_rndis =
+      (USBD_CDC_RNDIS_HandleTypeDef *)(pdev->pClassData);
 
-  if ((hcdc_cdc_rndis != NULL) && (hcdc_cdc_rndis->LinkStatus != 0U))
-  {
+  if ((hcdc_cdc_rndis != NULL) && (hcdc_cdc_rndis->LinkStatus != 0U)) {
     /*
        Add your code here
        Read a received packet from the Ethernet buffers and send it

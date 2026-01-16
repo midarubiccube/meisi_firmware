@@ -23,6 +23,7 @@
 #include "usb.h"
 #include "gpio.h"
 
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -36,6 +37,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /* USER CODE BEGIN Includes */
+#include "lwip/arch.h"
 #include "usb_device.h"
 #include <string.h> // strlen用
 /* USER CODE END PD */
@@ -60,7 +62,10 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+u32_t sys_now(void)
+{
+  return HAL_GetTick();
+}
 /* USER CODE END 0 */
 
 /**
